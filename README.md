@@ -34,28 +34,28 @@ To deploy this application to Reflex Cloud, follow these steps:
 
 ---
 
-## 🌐 Connecting a Custom Domain (GoDaddy)
+## 🌐 Connecting a Custom Domain (via reflex.dev)
 
-To connect your GoDaddy domain to your Reflex Cloud app:
+Reflex Cloud makes it easy to connect your own domain (like one from GoDaddy) directly through the dashboard.
 
-### 1. Add Domain in Reflex Cloud
-- Log in to your [Reflex Cloud dashboard](https://reflex.dev).
-- Select your app and go to the **Custom Domain** tab.
-- Enter your domain (e.g., `yourdomain.com`) and click **Add domain**.
-- Reflex will display a set of DNS records (A records or CNAME records). **Keep these handy.**
+### 1. Add Your Domain on Reflex.dev
+1. Log in to your [Reflex Cloud Dashboard](https://reflex.dev).
+2. Select the application you want to link.
+3. Click on the **Custom Domain** tab in the app settings.
+4. Enter your custom domain name (e.g., `www.yourdomain.com`) and click **Add Domain**.
+5. **Note:** Reflex will then generate the specific DNS records you need to add to your registrar.
 
-### 2. Update DNS Settings in GoDaddy
-- Log in to your [GoDaddy Account](https://dcc.godaddy.com/).
-- Find your domain and click **DNS** (Manage DNS).
-- **Add the records** provided by Reflex Cloud:
-  - If Reflex provides **A records**, update your `@` record with the provided IP addresses.
-  - If Reflex provides a **CNAME record**, update your `www` (or other subdomain) record.
-- **Delete** any existing A records that conflict with the new Reflex IP addresses.
+### 2. Configure DNS Settings (GoDaddy)
+1. Log in to your [GoDaddy Control Panel](https://dcc.godaddy.com/manage/portfolio).
+2. Find your domain and click on **DNS** or **Manage DNS**.
+3. Add the **A Records** or **CNAME Records** exactly as shown in your Reflex.dev dashboard.
+4. If there are existing `A` records for the same hostname, you should remove them to avoid conflicts.
 
-### 3. Finalize
-- Return to the Reflex Cloud dashboard and click **Verify** or refresh the page.
-- Once verified, **redeploy** your app using `reflex deploy`.
-- *Note: DNS propagation can take anywhere from a few minutes to 48 hours.*
+### 3. Verify and Finish
+1. Go back to your **Reflex.dev dashboard**.
+2. Click **Verify** (or wait for the status to update to "Verified").
+3. Once verified, run a final `reflex deploy` from your terminal to ensure the SSL certificate and routing are fully updated.
+4. *Propagation usually takes a few minutes, but can take up to 48 hours.*
 
 ---
 
