@@ -4,6 +4,7 @@ import random
 import httpx
 import asyncio
 import time
+from wonderwords import RandomWord
 
 globalPool = []
 apiCache = {}
@@ -27,7 +28,7 @@ async def fetchDatamuse(url: str, client: httpx.AsyncClient):
 
 class State(rx.State):
     inputWord: str = ""
-    previousWord: str = "water"
+    previousWord: str = ""
     feedback: str = ""
     targetWord: str = ""
     showInstructions: bool = False
@@ -42,6 +43,8 @@ class State(rx.State):
     customStart: str = ""
     customEnd: str = ""
     customError: str = ""
+    isLoading: bool = False
+    isDailyGame: bool = False
 
     @rx.var
     def score(self) -> int:
@@ -96,6 +99,7 @@ class State(rx.State):
         self.hasWon = False
         self.previousWord = start
         self.targetWord = end
+        self.isDailyGame = False
 
 
         try:
@@ -109,6 +113,44 @@ class State(rx.State):
         self.proximityScore = self.getWordSimilarity(start)
         self.lastProximityScore = self.proximityScore
 
+    async def startDailyGame(self):
+        import datetime
+        import random
+        from wonderwords import RandomWord
+
+        today = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%d")
+        
+        words = list(RandomWord().filter())
+        words.sort()
+        
+        rng = random.Random(today)
+        chosen = rng.sample(words, 2)
+        start = chosen[0].lower()
+        end = chosen[1].lower()
+
+        self.customError = ""
+        self.inputWord = ""
+        self.feedback = ""
+        self.wordPath = [start]
+        self.proximityScore = 0
+        self.lastProximityScore = 0
+        self.proximityDirection = ""
+        self.showWinModal = False
+        self.hasWon = False
+        self.previousWord = start
+        self.targetWord = end
+        self.isDailyGame = True
+
+        try:
+            url = f"https://api.datamuse.com/words?ml={urllib.parse.quote(end)}&max=1000"
+            async with httpx.AsyncClient(timeout=10.0) as client:
+                nRes = await fetchDatamuse(url, client)
+            self.targetNeighborhood = {item["word"]: item.get("score", 0) for item in nRes}
+        except Exception:
+            self.targetNeighborhood = {}
+
+        self.proximityScore = self.getWordSimilarity(start)
+        self.lastProximityScore = self.proximityScore
 
     async def resetGame(self):
         self.inputWord = ""
@@ -119,8 +161,11 @@ class State(rx.State):
         self.proximityDirection = ""
         self.showWinModal = False
         self.hasWon = False
+        self.isDailyGame = False
+        yield
 
-        await self.getWord()
+        async for state in self.getWord():
+            yield state
 
     def getWordSimilarity(self, word: str) -> int:
         word = word.lower().strip()
@@ -131,11 +176,21 @@ class State(rx.State):
         return normalized
 
     async def getWord(self):
+        self.isLoading = True
+        yield
         global globalPool
         try:
             if not globalPool:
-                anchors = ["thing", "place", "concept", "world", "system", "life", "action"]
                 async with httpx.AsyncClient(timeout=15.0) as client:
+                    try:
+                        resp = await client.get("https://random-word-api.herokuapp.com/word?number=5")
+                        if resp.status_code == 200:
+                            anchors = resp.json()
+                        else:
+                            anchors = RandomWord().random_words(5)
+                    except Exception:
+                        anchors = RandomWord().random_words(5)
+
                     anchorResponses = await asyncio.gather(
                         *[fetchDatamuse(f"https://api.datamuse.com/words?ml={anchor}&max=300&md=f", client) for anchor in anchors]
                     )
@@ -148,7 +203,14 @@ class State(rx.State):
 
                     poolList = list(pool)
                     if len(poolList) < 20:
-                        poolList = ["water", "fire", "earth", "air", "light", "dark", "sound", "time", "space", "nature"]
+                        try:
+                            resp = await client.get("https://random-word-api.herokuapp.com/word?number=50")
+                            if resp.status_code == 200:
+                                poolList = resp.json()
+                            else:
+                                raise Exception()
+                        except Exception:
+                            poolList = RandomWord().random_words(30)
                     globalPool = poolList
 
             attempts = 0
@@ -176,6 +238,9 @@ class State(rx.State):
 
         except Exception:
             self.feedback = "Error starting game."
+        
+        self.isLoading = False
+        yield
 
     def setInputWord(self, val):
         self.inputWord = val
@@ -442,20 +507,42 @@ def index() -> rx.Component:
 
         rx.vstack(
             rx.box(
-                rx.heading(
-                    "WordBridge",
-                    size="7",
+                rx.vstack(
+                    rx.heading(
+                        "WordBridge",
+                        size="7",
+                        style={
+                            "font_family": "'Inter', sans-serif",
+                            "font_weight": "700",
+                            "color": "#1a1a1b",
+                            "letter_spacing": "-0.02em",
+                        }
+                    ),
+                    rx.cond(
+                        State.isDailyGame,
+                        rx.badge("Daily Game", color_scheme="green", variant="solid", radius="full"),
+                        rx.fragment()
+                    ),
+                    spacing="1",
+                    align="center",
                     style={
                         "position": "absolute",
                         "left": "50%",
                         "transform": "translateX(-50%)",
-                        "font_family": "'Inter', sans-serif",
-                        "font_weight": "700",
-                        "color": "#1a1a1b",
-                        "letter_spacing": "-0.02em",
                     }
                 ),
                 rx.hstack(
+                    rx.button(
+                        "Daily",
+                        on_click=State.startDailyGame,
+                        size="1",
+                        variant="ghost",
+                        style={
+                            "color": "#787c7e",
+                            "font_weight": "600",
+                            "_hover": {"background_color": "transparent", "color": "#1a1a1b"}
+                        }
+                    ),
                     rx.button(
                         "Custom",
                         on_click=State.openCustomModal,
@@ -467,20 +554,16 @@ def index() -> rx.Component:
                             "_hover": {"background_color": "transparent", "color": "#1a1a1b"}
                         }
                     ),
-                    rx.cond(
-                        State.hasWon,
-                        rx.button(
-                            "New Game",
-                            on_click=State.resetGame,
-                            size="1",
-                            variant="ghost",
-                            style={
-                                "color": "#6aaa64",
-                                "font_weight": "700",
-                                "_hover": {"background_color": "transparent", "color": "#1a1a1b"}
-                            }
-                        ),
-                        rx.box()
+                    rx.button(
+                        "New Game",
+                        on_click=State.resetGame,
+                        size="1",
+                        variant="ghost",
+                        style={
+                            "color": "#787c7e",
+                            "font_weight": "600",
+                            "_hover": {"background_color": "transparent", "color": "#1a1a1b"}
+                        }
                     ),
                     spacing="2",
                     position="absolute",
@@ -499,141 +582,166 @@ def index() -> rx.Component:
             ),
 
             rx.center(
-                rx.vstack(
+                rx.cond(
+                    State.targetWord != "",
                     rx.vstack(
-                        rx.text(
-                            "TARGET WORD",
-                            size="2",
+                        rx.vstack(
+                            rx.text(
+                                "TARGET WORD",
+                                size="2",
+                                style={
+                                    "font_family": "'Inter', sans-serif",
+                                    "font_weight": "600",
+                                    "color": "#787c7e",
+                                    "letter_spacing": "0.1em"
+                                }
+                            ),
+                            rx.box(
+                                rx.text(
+                                    State.targetWord,
+                                    size="6",
+                                    style={
+                                        "font_family": "'Inter', sans-serif",
+                                        "font_weight": "700",
+                                        "color": "#ffffff",
+                                        "text_transform": "uppercase"
+                                    }
+                                ),
+                                background_color="#6aaa64",
+                                padding="0.6em 2em",
+                                border_radius="4px",
+                                box_shadow="0 2px 4px rgba(0,0,0,0.1)"
+                            ),
+                            align="center",
+                            spacing="2"
+                        ),
+                        rx.vstack(
+                            rx.hstack(
+                                rx.text("PROXIMITY", size="1", style={"font_weight": "bold", "color": "#787c7e"}),
+                                rx.spacer(),
+                                rx.text(
+                                    State.proximityDirection,
+                                    size="1",
+                                    style={
+                                        "font_weight": "bold",
+                                        "color": rx.cond(State.proximityDirection.contains("Closer"), "#6aaa64", "#ce3a3a")
+                                    }
+                                ),
+                                width="250px"
+                            ),
+                            align="center",
+                            spacing="2",
+                            width="250px",
+                        ),
+                        rx.spacer(),
+                        rx.vstack(
+                            rx.text(
+                                "CURRENT WORD",
+                                size="2",
+                                style={
+                                    "font_family": "'Inter', sans-serif",
+                                    "font_weight": "600",
+                                    "color": "#787c7e",
+                                    "letter_spacing": "0.1em"
+                                }
+                            ),
+                            rx.box(
+                                rx.text(
+                                    State.previousWord,
+                                    size="8",
+                                    style={
+                                        "font_family": "'Inter', sans-serif",
+                                        "font_weight": "800",
+                                        "color": "#1a1a1b",
+                                        "text_transform": "uppercase"
+                                    }
+                                ),
+                                padding="0.2em 0",
+                                border_bottom="4px solid #1a1a1b"
+                            ),
+                            align="center",
+                            spacing="2"
+                        ),
+                        rx.spacer(),
+                        rx.input(
+                            placeholder="Type a word...",
+                            value=State.inputWord,
+                            on_change=State.setInputWord,
+                            on_key_down=State.compareWord,
                             style={
+                                "width": "100%",
+                                "max_width": "300px",
+                                "height": "50px",
+                                "border_radius": "4px",
+                                "border": "2px solid #d3d6da",
                                 "font_family": "'Inter', sans-serif",
                                 "font_weight": "600",
-                                "color": "#787c7e",
-                                "letter_spacing": "0.1em"
+                                "font_size": "1.1em",
+                                "text_align": "center",
+                                "_focus": {
+                                    "border": "2px solid #1a1a1b",
+                                    "box_shadow": "none"
+                                }
                             }
                         ),
-                        rx.box(
+                        rx.vstack(
                             rx.text(
-                                State.targetWord,
-                                size="6",
+                                State.feedback,
+                                size="5",
                                 style={
                                     "font_family": "'Inter', sans-serif",
                                     "font_weight": "700",
-                                    "color": "#ffffff",
-                                    "text_transform": "uppercase"
-                                }
-                            ),
-                            background_color="#6aaa64",
-                            padding="0.6em 2em",
-                            border_radius="4px",
-                            box_shadow="0 2px 4px rgba(0,0,0,0.1)"
-                        ),
-                        align="center",
-                        spacing="2"
-                    ),
-                    rx.vstack(
-                        rx.hstack(
-                            rx.text("PROXIMITY", size="1", style={"font_weight": "bold", "color": "#787c7e"}),
-                            rx.spacer(),
-                            rx.text(
-                                State.proximityDirection,
-                                size="1",
-                                style={
-                                    "font_weight": "bold",
-                                    "color": rx.cond(State.proximityDirection.contains("Closer"), "#6aaa64", "#ce3a3a")
-                                }
-                            ),
-                            width="250px"
-                        ),
-                        align="center",
-                        spacing="2",
-                        width="250px",
-                    ),
-                    rx.spacer(),
-                    rx.vstack(
-                        rx.text(
-                            "CURRENT WORD",
-                            size="2",
-                            style={
-                                "font_family": "'Inter', sans-serif",
-                                "font_weight": "600",
-                                "color": "#787c7e",
-                                "letter_spacing": "0.1em"
-                            }
-                        ),
-                        rx.box(
-                            rx.text(
-                                State.previousWord,
-                                size="8",
-                                style={
-                                    "font_family": "'Inter', sans-serif",
-                                    "font_weight": "800",
                                     "color": "#1a1a1b",
-                                    "text_transform": "uppercase"
+                                    "margin_top": "1.5em",
+                                    "min_height": "1.2em",
+                                    "text_transform": "uppercase",
+                                    "letter_spacing": "0.05em"
                                 }
                             ),
-                            padding="0.2em 0",
-                            border_bottom="4px solid #1a1a1b"
+                            rx.cond(
+                                State.feedback == "You Win",
+                                rx.button(
+                                    "View Path",
+                                    on_click=State.setShowWinModal(True),
+                                    size="1",
+                                    variant="outline",
+                                    border="1px solid #d3d6da",
+                                    color="#787c7e",
+                                    cursor="pointer",
+                                    _hover={"color": "#1a1a1b", "border": "1px solid #1a1a1b"}
+                                ),
+                                rx.box()
+                            ),
+                            align="center",
+                            spacing="2"
                         ),
+                        width="100%",
                         align="center",
-                        spacing="2"
-                    ),
-                    rx.spacer(),
-                    rx.input(
-                        placeholder="Type a word...",
-                        value=State.inputWord,
-                        on_change=State.setInputWord,
-                        on_key_down=State.compareWord,
-                        style={
-                            "width": "100%",
-                            "max_width": "300px",
-                            "height": "50px",
-                            "border_radius": "4px",
-                            "border": "2px solid #d3d6da",
-                            "font_family": "'Inter', sans-serif",
-                            "font_weight": "600",
-                            "font_size": "1.1em",
-                            "text_align": "center",
-                            "_focus": {
-                                "border": "2px solid #1a1a1b",
-                                "box_shadow": "none"
-                            }
-                        }
+                        spacing="8",
+                        padding_top="4em"
                     ),
                     rx.vstack(
-                        rx.text(
-                            State.feedback,
-                            size="5",
-                            style={
-                                "font_family": "'Inter', sans-serif",
-                                "font_weight": "700",
-                                "color": "#1a1a1b",
-                                "margin_top": "1.5em",
-                                "min_height": "1.2em",
-                                "text_transform": "uppercase",
-                                "letter_spacing": "0.05em"
-                            }
-                        ),
                         rx.cond(
-                            State.feedback == "You Win",
+                            State.isLoading,
+                            rx.text("Loading...", style={"font_weight": "600", "color": "#787c7e"}),
                             rx.button(
-                                "View Path",
-                                on_click=State.setShowWinModal(True),
-                                size="1",
-                                variant="outline",
-                                border="1px solid #d3d6da",
-                                color="#787c7e",
-                                cursor="pointer",
-                                _hover={"color": "#1a1a1b", "border": "1px solid #1a1a1b"}
-                            ),
-                            rx.box()
+                                "Start Game",
+                                on_click=State.getWord,
+                                style={
+                                    "background_color": "#1a1a1b",
+                                    "color": "#ffffff",
+                                    "padding": "1em 3em",
+                                    "border_radius": "8px",
+                                    "font_size": "1.2em",
+                                    "font_weight": "700"
+                                }
+                            )
                         ),
+                        width="100%",
                         align="center",
-                        spacing="2"
-                    ),
-                    width="100%",
-                    align="center",
-                    spacing="8",
-                    padding_top="4em"
+                        spacing="8",
+                        padding_top="8em"
+                    )
                 ),
                 width="100%"
             ),
@@ -651,4 +759,4 @@ app = rx.App(
         "https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700;800&display=swap"
     ]
 )
-app.add_page(index, on_load=[State.getWord, State.openInstructions])
+app.add_page(index, on_load=[State.openInstructions])
